@@ -8,6 +8,7 @@ open Result.Syntax
 open Affect
 
 let unix_sleepf = Unix.sleepf (* in case we redefine it in the future *)
+let unix_read = Unix.read (* This read does not wait for data. *)
 open Affect_unix
 
 let test_ok ret = Test.(result ~ok:T.unit) (Ok ()) ret
@@ -125,6 +126,47 @@ let test_fd_no_ebadf =
      unblocker data but we should not raise EBADF. Let's invoke the
      unblocker once to make sure we don't EBADF. *)
   Mtime.wait_for Mtime.Span.(100 * us);
+  ()
+
+let test_fd_no_spurious_readable =
+  Test.test' domain_count "Unix.wait_readable no spurious wakeup" @@
+  fun domain_count -> Unix.main ?domain_count @@ fun () ->
+  (* Pairs of fibers send one byte to each other through two pipes. Only
+     one fiber reads from each pipe, and only one byte is in a pipe at a
+     time. Thus, if a fiber finds no data after a wakeup, the wakeup is
+     spurious. With more than one domain, a select must wake only the wait
+     registrations that were in its fd sets. *)
+  let pairs = 4 and rounds = 5_000 in
+  let spurious = Atomic.make 0 in
+  let pipe () =
+    let r, w = Unix.pipe ~cloexec:true () in
+    Unix.set_nonblock r; Unix.set_nonblock w; r, w
+  in
+  let rec read_byte fd buf =
+    Action.invoke (Unix.wait_readable fd ());
+    match unix_read fd buf 0 1 with
+    | 1 -> ()
+    | _ -> Test.failstop "End of file before the byte"
+    | exception Unix.Unix_error ((EAGAIN | EWOULDBLOCK), _, _) ->
+        Atomic.incr spurious; read_byte fd buf
+  in
+  let player ~first ~input ~output () =
+    let buf = Bytes.make 1 'x' in
+    if first then ignore (Unix.write output buf 0 1);
+    for _ = 1 to rounds do
+      read_byte input buf; ignore (Unix.write output buf 0 1)
+    done
+  in
+  let pair () =
+    let a_in, b_out = pipe () and b_in, a_out = pipe () in
+    let a = Fun.Async.call (player ~first:true ~input:a_in ~output:a_out) in
+    let b = Fun.Async.call (player ~first:false ~input:b_in ~output:b_out) in
+    [a; b], [a_in; a_out; b_in; b_out]
+  in
+  let calls, fds = List.split (List.init pairs (fun _ -> pair ())) in
+  List.iter Fun.Async.get (List.concat calls);
+  List.iter Unix.close_noerr (List.concat fds);
+  Test.int ~__POS__ (Atomic.get spurious) 0;
   ()
 
 let test_ping_pong_server =
