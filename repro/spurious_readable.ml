@@ -1,10 +1,10 @@
-(* Counts Unix.wait_readable wakeups after which the fd is not readable.
+(* Counts the Unix.wait_readable wakeups after which the fd has no data.
 
-   Pairs of fibers bounce one byte over two pipes: each waits until its
-   pipe is readable, reads the byte with a non-blocking read and writes it
-   to the other pipe. Only one byte is ever in flight, and each pipe has a
-   single reader, so a read that finds nothing after a wakeup means the
-   wakeup was spurious.
+   Pairs of fibers send one byte to each other through two pipes. Each
+   fiber waits until its input pipe is readable. Then it reads the byte
+   with a non-blocking read and writes the byte to its output pipe. Each
+   pipe has only one reader. Only one byte is in a pipe at a time. If a
+   read finds no data after a wakeup, the wakeup is spurious.
 
    Usage: spurious_readable.exe [DOMAINS] [PAIRS] [ROUNDS] *)
 
@@ -25,7 +25,7 @@ let () =
     Action.invoke (Aunix.wait_readable fd ());
     match Unix.read fd buf 0 1 with
     | 1 -> ()
-    | _ -> failwith "unexpected EOF"
+    | _ -> failwith "end of file before the byte"
     | exception Unix.Unix_error ((EAGAIN | EWOULDBLOCK), _, _) ->
         Atomic.incr spurious; read_byte fd buf
   in
