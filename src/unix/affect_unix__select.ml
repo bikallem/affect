@@ -12,10 +12,16 @@ open Affect_unix__fd
 type blocked = Action.Blocked.Value.t
 type blocked_state = { readable : blocked list; writable : blocked list; }
 
-let unblock_fd rset wset fd st =
+let fdi (fd : Unix.file_descr) : int = Obj.magic fd
+let selseq = Atomic.make 0
+let unblock_one ~sel fd b =
+  let ours = Action.Blocked.Value.synced_unblock_is_ours b in
+  Dbg.ev 22 (fdi fd) (Action.Blocked.Value.dbg_id b) (sel * 2 + Bool.to_int ours)
+
+let unblock_fd ~sel rset wset fd st =
   let readable =
     if List.mem fd rset
-    then (List.iter Action.Blocked.Value.synced_unblock st.readable; [])
+    then (List.iter (unblock_one ~sel fd) st.readable; [])
     else List.filter Action.Blocked.Value.is_not_synced st.readable (* gc *)
   in
   let writable =
@@ -76,6 +82,7 @@ let fd_sets u =
   Fd.Synchronized_map.fold add u.fds ([], [])
 
 let add_wait_readable u fd ~blocked =
+  Dbg.ev 14 (fdi fd) (Action.Blocked.Value.dbg_id blocked) 0;
   let add_read r = function
   | None -> Some { readable = [r]; writable = [] }
   | Some st -> Some { st with readable = r :: st.readable }
@@ -95,7 +102,10 @@ let rec unblock u ~timeout_ns =
   | Some dur_s -> Affect_unix__timeline.mtime_span_ns_to_float_s dur_s
   in
   let blocking = timeout_s <> 0. in
+  let sel = Atomic.fetch_and_add selseq 1 in
+  Dbg.ev 20 sel (Bool.to_int blocking) 0;
   let rset, wset = fd_sets u in
+  Dbg.ev 23 sel (List.length rset) (match rset with fd :: _ -> fdi fd | [] -> -1);
   let rset = Affect_unix__signal.syscall_block_bypass_fd :: rset in
   let rset = if blocking then Flagfd.fd u.block_bypass :: rset else rset in
   let did_unblock = match Unix.select rset wset [] timeout_s with
@@ -106,6 +116,7 @@ let rec unblock u ~timeout_ns =
       if blocking then Flagfd.clear u.block_bypass;
       false
   | rset, wset, _eset ->
+      List.iter (fun fd -> Dbg.ev 21 sel (fdi fd) 0) rset;
       Affect_unix__signal.clear_syscall_block_bypass ();
       if blocking then Flagfd.clear u.block_bypass;
       (* XXX Except for performance there is no harm in doing the operation
@@ -114,7 +125,7 @@ let rec unblock u ~timeout_ns =
          on each fd with an iter, we don't really need the whole batch to be
          consistent. It's still a good idea to go over all of them for
          gc, though we could move that to [fd_sets]. *)
-      Fd.Synchronized_map.update_all (unblock_fd rset wset) u.fds;
+      Fd.Synchronized_map.update_all (unblock_fd ~sel rset wset) u.fds;
       not (List.is_empty rset) || not (List.is_empty wset)
       (* XXX formally we may not have unblocked anything because we are not
          using [sync_unblock_is_ours] in [blocked_synced_unblock] or rather

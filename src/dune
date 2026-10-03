@@ -1,0 +1,9 @@
+(library
+ (name affect)
+ (public_name affect)
+ (wrapped false)
+ (flags (:standard -w -a))
+ (modules affect affect__base affect__action affect__async_fun
+  affect__scheduler affect__port affect__cell affect__trace affect__semaphore)
+ (libraries threads.posix))
+(dirs unix)

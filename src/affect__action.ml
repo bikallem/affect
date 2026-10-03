@@ -62,13 +62,14 @@ end
 
 module Blocked = struct
   type state = Waiting | Claimed | Synced
-  type 'a t = { state : state Atomic.t; unblock : 'a Result.t -> unit }
+  type 'a t = { dbg : int; state : state Atomic.t; unblock : 'a Result.t -> unit }
 
-  let make ~unblock = { state = Atomic.make Waiting; unblock }
+  let make ~unblock = { dbg = Dbg.fresh_id (); state = Atomic.make Waiting; unblock }
+  let dbg_id b = b.dbg
   let with_unblock unblock b = { b with unblock }
 
   let none_unblock _ = assert false
-  let none () = { state = Atomic.make Waiting; unblock = none_unblock }
+  let none () = { dbg = 0; state = Atomic.make Waiting; unblock = none_unblock }
 
   (* State *)
 
@@ -106,6 +107,7 @@ module Blocked = struct
     type nonrec 'a blocked = 'a t
     type t = V : 'a Result.t * 'a blocked -> t
     let make v b = V (Result.Value v, b)
+    let dbg_id (V (_, b)) = b.dbg
     let exchange_waiting_to_synced (V (_, b)) = exchange_waiting_to_synced b
     let exchange_waiting_to_claimed (V (_, b)) = exchange_waiting_to_claimed b
     let set_state (V (_, b)) st = set_state b st
@@ -232,12 +234,13 @@ module Invocation = struct
         let bt = Printexc.get_raw_backtrace () in
         Some (continue (Result.Exn (exn, bt)))
 
-  let do_block ~unblock invocation =
+  let do_block ?(dbg = -1) ~unblock invocation =
     (* XXX We could check if the state is synced after a block to early exit.
        But we'd need to indicate in the primitive protocol that a [None] poll
        does not necessarily entail a [block] invocation. Would it be a
        problem ? *)
     let blocked = Blocked.make ~unblock in
+    Dbg.ev 2 dbg blocked.dbg (List.length invocation.choice);
     let block_primitive { block } = block ~blocked in
     let choice = choice invocation in
     try List.iter block_primitive choice with

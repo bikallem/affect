@@ -306,7 +306,7 @@ module Private : sig
              {!Invoke_poll} you should continue with [None] and if you are
              handling {!Invoke} you should move on to call {!do_block}}} *)
 
-      val do_block :
+      val do_block : ?dbg:int ->
         unblock:('a Result.t -> unit) -> 'a t -> unit
       (** [do_block ~unblock invocation] must be called on an {!Invoke} after –
           and {b only} after – a call to {!do_poll} on [invocation]
@@ -362,6 +362,7 @@ module Private : sig
           action invocation. *)
 
       val none : unit -> 'a t
+      val dbg_id : 'a t -> int
       (** [none ()] is a blocked invocation for when there is none.
           Trying to unblock it raises [Assert_failure]. *)
 
@@ -559,6 +560,7 @@ module Private : sig
         (** The value to resume with and the blocked invocation. *)
 
         val make : 'a -> 'a blocked -> t
+        val dbg_id : t -> int
         (** [make v b] is [V (Action.Result.Value v, b)]. *)
 
         val exchange_waiting_to_synced : t -> state

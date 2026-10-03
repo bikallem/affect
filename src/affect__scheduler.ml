@@ -368,6 +368,7 @@ let continue_ready dom (call, continue as ready) =
      that there were concurrent push/pop operations which is NEIN! *)
   assert (ready != ready_nil);
   trace_report dom (Async_fun_continue (Async_fun.Call.id call));
+  Dbg.ev 5 (Async_fun.Call.id call) (Domain_local.index dom) 0;
   Domain_local.set_call dom call;
   continue ()
 
@@ -415,6 +416,7 @@ let do_async_call s dom ~handler ~schedule run f =
   let run_f () = run s (fun () -> Async_fun.run af f) in
   let parent = Async_fun.Call.id parent and id = Async_fun.id_int af in
   trace_report dom (Async_fun_call { parent; id });
+  Dbg.ev 1 parent id 0;
   schedule_ready s dom (Async_fun.Call.of_async_fun af, run_f);
   af
 
@@ -436,11 +438,12 @@ let do_action_invoke s dom action k =
             | Right exec_id -> exec_id, Domain_local.none (* external queue *)
             in
             trace_report_exec_id exec_id (Action_unblock (call_id, meta));
+            Dbg.ev 4 call_id (Domain_local.index dom) 0;
             schedule_ready s dom (call, continue result)
           in
           Domain_local.set_call_none dom;
           trace_report dom (Action_block (call_id, meta));
-          Action.Invocation.do_block ~unblock invocation;
+          Action.Invocation.do_block ~dbg:call_id ~unblock invocation;
           run_next_ready s dom
 
 let do_action_invoke_poll s dom action k =

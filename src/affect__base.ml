@@ -622,3 +622,37 @@ module Circular_list = struct
 
   let of_list vs = let l = make () in List.iter (add_last l) vs; l
 end
+
+(* Debug event log (debug/lost-wakeup branch). A fixed array filled
+   lock-free; [dump] writes it out. Each event: kind, domain, a, b, c. *)
+module Dbg = struct
+  let cap = 1 lsl 21
+  let width = 5
+  let buf = Array.make (cap * width) 0
+  let idx = Atomic.make_contended 0
+  let enabled = Sys.getenv_opt "AFFECT_DBG" <> Some "0"
+  let ev kind a b c =
+    if enabled then begin
+      let i = Atomic.fetch_and_add idx 1 in
+      if i < cap then begin
+        let j = i * width in
+        Array.unsafe_set buf j kind;
+        Array.unsafe_set buf (j + 1) (Domain.self () :> int);
+        Array.unsafe_set buf (j + 2) a;
+        Array.unsafe_set buf (j + 3) b;
+        Array.unsafe_set buf (j + 4) c
+      end
+    end
+  let next_id = Atomic.make 1
+  let fresh_id () = Atomic.fetch_and_add next_id 1
+  let dump file =
+    let oc = open_out file in
+    let n = Int.min cap (Atomic.get idx) in
+    Printf.fprintf oc "# events %d (of %d)\n" n (Atomic.get idx);
+    for i = 0 to n - 1 do
+      let j = i * width in
+      Printf.fprintf oc "%d %d %d %d %d %d\n" i buf.(j) buf.(j + 1)
+        buf.(j + 2) buf.(j + 3) buf.(j + 4)
+    done;
+    close_out oc
+end

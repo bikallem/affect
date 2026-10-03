@@ -436,3 +436,12 @@ module Circular_list : sig
   val of_list : 'a list -> 'a t
   (** [of_list l] is a circular list with elements [l]. *)
 end
+
+(** Debug event log (debug/lost-wakeup branch). *)
+module Dbg : sig
+  val ev : int -> int -> int -> int -> unit
+  (** [ev kind a b c] logs an event attributed to the current domain. *)
+
+  val fresh_id : unit -> int
+  val dump : string -> unit
+end

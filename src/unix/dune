@@ -1,0 +1,10 @@
+(library
+ (name affect_unix)
+ (public_name affect.unix)
+ (wrapped false)
+ (flags (:standard -w -a))
+ (modules affect_unix affect_unix__mtime affect_unix__ptime
+  affect_unix__timeline affect_unix__fd affect_unix__signal
+  affect_unix__select affect_unix__unix)
+ (foreign_stubs (language c) (names affect_unix_stubs_time))
+ (libraries unix affect))
