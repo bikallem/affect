@@ -12,20 +12,6 @@ open Affect_unix__fd
 type blocked = Action.Blocked.Value.t
 type blocked_state = { readable : blocked list; writable : blocked list; }
 
-let unblock_fd rset wset fd st =
-  let readable =
-    if List.mem fd rset
-    then (List.iter Action.Blocked.Value.synced_unblock st.readable; [])
-    else List.filter Action.Blocked.Value.is_not_synced st.readable (* gc *)
-  in
-  let writable =
-    if List.mem fd wset
-    then (List.iter Action.Blocked.Value.synced_unblock st.writable; [])
-    else List.filter Action.Blocked.Value.is_not_synced st.writable (* gc *)
-  in
-  if List.is_empty readable && List.is_empty writable then None else
-  Some { readable; writable }
-
 type t = { fds : blocked_state Fd.Synchronized_map.t; block_bypass : Flagfd.t }
 
 let make () =
@@ -68,12 +54,27 @@ let gc_synced u = Fd.Synchronized_map.update_all gc_fd u.fds
 let gc_ebadf u = Fd.Synchronized_map.update_all gc_ebadf u.fds
 let is_empty u = gc_synced u; Fd.Synchronized_map.is_empty u.fds
 let fd_sets u =
-  let add fd st (rset, wset) =
+  (* Gives the sets, and the wait registrations that it used to make them. *)
+  let add fd st (rset, wset, waits) =
     let rset = if List.is_empty st.readable then rset else fd :: rset in
     let wset = if List.is_empty st.writable then wset else fd :: wset in
-    (rset, wset)
+    (rset, wset, (fd, st) :: waits)
   in
-  Fd.Synchronized_map.fold add u.fds ([], [])
+  Fd.Synchronized_map.fold add u.fds ([], [], [])
+
+let unblock_waits rset wset waits =
+  (* Wakes only the [waits] that were in the sets given to [select]. With
+     more than one domain, a fiber can add a wait registration after
+     [fd_sets] made the sets. Then the data on its fd is possibly not there
+     at this time. Usually, the same fiber read the data after the [select]
+     of a different domain woke the fiber. *)
+  let unblock (fd, st) =
+    if List.mem fd rset
+    then List.iter Action.Blocked.Value.synced_unblock st.readable;
+    if List.mem fd wset
+    then List.iter Action.Blocked.Value.synced_unblock st.writable
+  in
+  List.iter unblock waits
 
 let add_wait_readable u fd ~blocked =
   let add_read r = function
@@ -95,7 +96,7 @@ let rec unblock u ~timeout_ns =
   | Some dur_s -> Affect_unix__timeline.mtime_span_ns_to_float_s dur_s
   in
   let blocking = timeout_s <> 0. in
-  let rset, wset = fd_sets u in
+  let rset, wset, waits = fd_sets u in
   let rset = Affect_unix__signal.syscall_block_bypass_fd :: rset in
   let rset = if blocking then Flagfd.fd u.block_bypass :: rset else rset in
   let did_unblock = match Unix.select rset wset [] timeout_s with
@@ -108,13 +109,8 @@ let rec unblock u ~timeout_ns =
   | rset, wset, _eset ->
       Affect_unix__signal.clear_syscall_block_bypass ();
       if blocking then Flagfd.clear u.block_bypass;
-      (* XXX Except for performance there is no harm in doing the operation
-         more than once if there is an atomic retry. But we should try to
-         eventually avoid this. A first step would perhaps to do it atomically
-         on each fd with an iter, we don't really need the whole batch to be
-         consistent. It's still a good idea to go over all of them for
-         gc, though we could move that to [fd_sets]. *)
-      Fd.Synchronized_map.update_all (unblock_fd rset wset) u.fds;
+      unblock_waits rset wset waits;
+      gc_synced u;
       not (List.is_empty rset) || not (List.is_empty wset)
       (* XXX formally we may not have unblocked anything because we are not
          using [sync_unblock_is_ours] in [blocked_synced_unblock] or rather
