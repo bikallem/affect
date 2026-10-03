@@ -1,0 +1,6 @@
+; Needs caravan in the workspace, see README.md.
+(executable
+ (name stress)
+ (optional)
+ (modules stress old_engine)
+ (libraries caravan affect affect.unix unix))
