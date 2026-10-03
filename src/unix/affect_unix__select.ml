@@ -74,12 +74,23 @@ let gc_synced u = Fd.Synchronized_map.update_all gc_fd u.fds
 let gc_ebadf u = Fd.Synchronized_map.update_all gc_ebadf u.fds
 let is_empty u = gc_synced u; Fd.Synchronized_map.is_empty u.fds
 let fd_sets u =
-  let add fd st (rset, wset) =
+  let add fd st (rset, wset, waits) =
     let rset = if List.is_empty st.readable then rset else fd :: rset in
     let wset = if List.is_empty st.writable then wset else fd :: wset in
-    (rset, wset)
+    (rset, wset, (fd, st) :: waits)
   in
-  Fd.Synchronized_map.fold add u.fds ([], [])
+  Fd.Synchronized_map.fold add u.fds ([], [], [])
+
+(* Unblocks, among [waits], those on the ready fds of [rset] and [wset].
+   Only those: a wait registered after [fd_sets] was taken may be for a
+   readiness that was consumed in the meantime. *)
+let unblock_waits ~sel rset wset waits =
+  let unblock (fd, st) =
+    if List.mem fd rset then List.iter (unblock_one ~sel fd) st.readable;
+    if List.mem fd wset
+    then List.iter Action.Blocked.Value.synced_unblock st.writable
+  in
+  List.iter unblock waits
 
 let add_wait_readable u fd ~blocked =
   Dbg.ev 14 (fdi fd) (Action.Blocked.Value.dbg_id blocked) 0;
@@ -104,7 +115,7 @@ let rec unblock u ~timeout_ns =
   let blocking = timeout_s <> 0. in
   let sel = Atomic.fetch_and_add selseq 1 in
   Dbg.ev 20 sel (Bool.to_int blocking) 0;
-  let rset, wset = fd_sets u in
+  let rset, wset, waits = fd_sets u in
   Dbg.ev 23 sel (List.length rset) (match rset with fd :: _ -> fdi fd | [] -> -1);
   let rset = Affect_unix__signal.syscall_block_bypass_fd :: rset in
   let rset = if blocking then Flagfd.fd u.block_bypass :: rset else rset in
@@ -125,7 +136,9 @@ let rec unblock u ~timeout_ns =
          on each fd with an iter, we don't really need the whole batch to be
          consistent. It's still a good idea to go over all of them for
          gc, though we could move that to [fd_sets]. *)
-      Fd.Synchronized_map.update_all (unblock_fd ~sel rset wset) u.fds;
+      if Sys.getenv_opt "AFFECT_SNAPSHOT" = Some "0"
+      then Fd.Synchronized_map.update_all (unblock_fd ~sel rset wset) u.fds
+      else (unblock_waits ~sel rset wset waits; gc_synced u);
       not (List.is_empty rset) || not (List.is_empty wset)
       (* XXX formally we may not have unblocked anything because we are not
          using [sync_unblock_is_ours] in [blocked_synced_unblock] or rather

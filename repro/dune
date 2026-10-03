@@ -1,0 +1,3 @@
+(executable
+ (name spurious_readable)
+ (libraries affect affect.unix unix))
