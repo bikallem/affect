@@ -1,12 +1,12 @@
 (* Counts the Unix.wait_readable wakeups after which the fd has no data.
 
    Pairs of fibers send one byte to each other through two pipes. Each
-   fiber waits until its input pipe is readable. Then it reads the byte
-   with a non-blocking read and writes the byte to its output pipe. Each
-   pipe has only one reader. Only one byte is in a pipe at a time. If a
-   read finds no data after a wakeup, the wakeup is spurious.
+   fiber waits until its input pipe has data. Then it reads the byte from
+   the non-blocking pipe and writes the byte to its output pipe. Only one
+   fiber reads from each pipe. Only one byte is in a pipe at a time. If a
+   fiber finds no data after a wakeup, the wakeup is spurious.
 
-   Usage: spurious_readable.exe [DOMAINS] [PAIRS] [ROUNDS] *)
+   Command: spurious_readable.exe [DOMAINS] [PAIRS] [ROUNDS] *)
 
 open Affect
 module Aunix = Affect_unix.Unix
