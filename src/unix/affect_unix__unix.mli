@@ -216,39 +216,25 @@ end
 
 (** {1:unblocking Unblocking the cooperants} *)
 
-val unblocker : unit -> Action.unblocker
-(** [unblocker ()] is an action unblocker to use with
+val unblocker : ?clock:Affect_unix__mtime.Clock.t -> unit -> Action.unblocker
+(** [unblocker ~clock ()] is an action unblocker to use with
     {!Affect.Fun.Async.main} for handling actions from
-    {!Unix}, {!Mtime} and {!Ptime}. *)
+    {!Unix}, {!Mtime} and {!Ptime}. {!Mtime} uses [clock] (defaults to
+    {!Affect_unix__mtime.Clock.system}). *)
 
 val main :
-  ?sigpipe:Signal.handler -> ?virtual_time:bool ->
+  ?sigpipe:Signal.handler -> ?clock:Affect_unix__mtime.Clock.t ->
   ?domain_spawn:((unit -> unit) -> unit Domain.t) ->
   ?domain_count:int -> ?schedule:Fun.Async.Schedule.t ->
   ?handler:Fun.Async.Call_handler.t -> (unit -> 'a) -> 'a
 (** Invoking {!main} expands to:
     {[
     Unix.Signal.set_and_restore Sys.sigpipe sigpipe @@ fun () ->
-    let unblocker = Unix.unblocker () in
+    let unblocker = Unix.unblocker ?clock () in
     Fun.Async.main ~unblocker ?domain_spawn ?domain_count ?schedule ?handler f
     ]}
     The default of [sigpipe] is {!Unix.Signal.Ignore} which is the right
-    default.
-
-    If [virtual_time] is [true] (defaults to [false]), {!Mtime} runs on a
-    virtual clock during [f], for tests. The clock starts at the real
-    monotonic time and moves only when no domain has work: then it goes
-    to the next {!Mtime} deadline at once. File descriptors are polled
-    without a wait before the clock moves, so data that is already in a
-    pipe or a socket pair is taken first. Notes:
-    {ul
-    {- The virtual clock is global to the program: only one [main] with
-       [virtual_time] can run at a time, and other code that reads
-       {!Mtime} in the meantime sees the virtual clock.
-       @raise Invalid_argument if a [main] with virtual time already runs.}
-    {- {!Ptime} deadlines do not use the virtual clock.}
-    {- Data that is not yet visible to [select(2)], for example data that a
-       peer sends through a network, does not stop the clock.}} *)
+    default. *)
 
 (** {1:changes Changes from the [Unix] module} *)
 

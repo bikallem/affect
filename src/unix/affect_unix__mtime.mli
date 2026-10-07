@@ -256,6 +256,45 @@ val of_uint64_ns : int64 -> t
 val pp : Format.formatter -> t -> unit
 (** [pp] is a formatter for timestamps. *)
 
+(** {1:clocks Clocks}
+
+    The scheduler of [Affect_unix.Unix.main] reads the time from a
+    clock, and asks the clock to let time pass when it has nothing to
+    run. {!now}, the {{!waiting}waits} and the {{!counters}counters} use
+    the clock of the scheduler that runs the caller, and {!Clock.system}
+    outside a scheduler. *)
+
+(** Clocks. *)
+module Clock : sig
+  type mtime := t
+
+  type t
+  (** The type for monotonic clocks. *)
+
+  val make :
+    now:(unit -> mtime) ->
+    elapse:(wait:(Span.t option -> bool) -> Span.t option -> bool) -> unit -> t
+  (** [make ~now ~elapse ()] is a clock with:
+      {ul
+      {- [now ()], the current time of the clock. It must never decrease.}
+      {- [elapse ~wait span], called by the scheduler when it has nothing
+         to run. It must let at most [span] of time pass ([None] is no
+         limit) and use [wait] to wait for events from outside the
+         scheduler, such as file descriptors and signals. [wait timeout]
+         waits at most [timeout] ([None] is no limit) and is [true] if
+         events or new work are ready. [elapse] is [true] if [wait] is or
+         if time passed. It is called by one domain at a time.}} *)
+
+  val system : t
+  (** [system] is {{!the_monotonic_clock}the monotonic clock} of the
+      operating system. Its [elapse ~wait span] is [wait span]: time
+      passes while [wait] waits. *)
+
+  (**/**)
+  val timeline_clock : t -> Affect_unix__timeline.clock
+  (**/**)
+end
+
 (** {1:the_monotonic_clock The monotonic clock}
 
     {ul

@@ -121,6 +121,13 @@ let to_uint64_ns t = t
 let of_uint64_ns ns = ns
 let pp ppf s = Format.fprintf ppf "%Lu" s
 
+module Clock = struct
+  type t = Affect_unix__timeline.clock
+  let make ~now ~elapse () = { Affect_unix__timeline.now; elapse }
+  let system = Affect_unix__timeline.system_clock
+  let timeline_clock c = c
+end
+
 (* Waiting *)
 
 open Affect

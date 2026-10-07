@@ -14,7 +14,7 @@ open Affect.Action.Private
 type uint64 = int64
 type mtime_ns = uint64
 type mtime_span_ns = uint64
-external real_mtime_now_ns : unit -> mtime_ns = "ocaml_affect_mtime_now_ns"
+external system_mtime_now_ns : unit -> mtime_ns = "ocaml_affect_mtime_now_ns"
 
 let int64_min_int_float = Int64.to_float Int64.min_int
 let int64_max_int_float = Int64.to_float Int64.max_int
@@ -34,31 +34,20 @@ let mtime_add_span t span =
   let sum = Int64.add t span in
   if mtime_compare t sum <= 0 then Some sum else None
 
-(* Virtual time
+(* Monotonic clocks
 
-   When virtual time is on, the monotonic clock is [virtual_ns] and only
-   {!virtual_advance} moves it. The unblocker of [Unix.main ~virtual_time:true]
-   advances it to the next deadline when no domain has work. *)
+   A clock reads the time, and lets time pass when the scheduler has
+   nothing to run. [elapse ~wait span] must let at most [span] pass
+   ([None] is no limit) and call [wait] to wait for events from outside
+   the scheduler. [wait timeout] waits at most [timeout] and is [true]
+   if events or new work are ready. *)
 
-let virtual_on = Atomic.make false
-let virtual_ns = Atomic.make 0L
+type clock =
+  { now : unit -> mtime_ns;
+    elapse : wait:(mtime_span_ns option -> bool) -> mtime_span_ns option -> bool }
 
-let mtime_now_ns () =
-  if Atomic.get virtual_on then Atomic.get virtual_ns else real_mtime_now_ns ()
-
-let is_virtual () = Atomic.get virtual_on
-let virtual_start () =
-  if not (Atomic.compare_and_set virtual_on false true)
-  then invalid_arg "Virtual time is already on";
-  Atomic.set virtual_ns (real_mtime_now_ns ())
-
-let virtual_stop () = Atomic.set virtual_on false
-let virtual_advance span =
-  let now = Atomic.get virtual_ns in
-  let next = match mtime_add_span now span with
-  | None -> mtime_max_stamp | Some t -> t
-  in
-  Atomic.set virtual_ns next
+let system_clock =
+  { now = system_mtime_now_ns; elapse = (fun ~wait span -> wait span) }
 
 (* POSIX clock
 
@@ -106,9 +95,13 @@ end
 
 module Deadlines = Synchronized_pqueue.MakeMin (Deadline)
 
-type t = { gc_count : int Atomic.t; deadlines : Deadlines.t; }
+type t = { clock : clock; gc_count : int Atomic.t; deadlines : Deadlines.t; }
 
-let make () = { gc_count = Atomic.make 0; deadlines = Deadlines.make () }
+let make ?(clock = system_clock) () =
+  { clock; gc_count = Atomic.make 0; deadlines = Deadlines.make () }
+
+let clock tl = tl.clock
+let elapse tl ~wait span = tl.clock.elapse ~wait span
 
 let gc_threshold = 300
 let gc_synced tl =
@@ -131,7 +124,7 @@ let add_mtime_deadline tl t blocked = add_deadline (t, Mtime blocked) tl
 let add_ptime_deadline tl ~now ptime blocked =
   let posix_span = ptime_sub ptime now in (* assert (ptime > now) *)
   let mtime_span_ns = ptime_span_to_mtime_span_ns posix_span in
-  let now = mtime_now_ns () in
+  let now = tl.clock.now () in
   let mt = match mtime_add_span now mtime_span_ns with
   | None -> mtime_max_stamp (* well… *) | Some t -> t
   in
@@ -158,13 +151,13 @@ let progress_to_next_deadline tl =
         let did_unblock = did_unblock || unblocked in
         unblock ~did_unblock tl ~now
     | Some Either.Right (t, _) ->
-        let now = mtime_now_ns () in
+        let now = tl.clock.now () in
         if mtime_deadline_expired t ~now
         then unblock ~did_unblock tl ~now else
         let next_deadline_in_ns = Int64.sub t now in
         did_unblock, Some next_deadline_in_ns
   in
-  let ret = unblock ~did_unblock:false tl ~now:(mtime_now_ns ()) in
+  let ret = unblock ~did_unblock:false tl ~now:(tl.clock.now ()) in
   maybe_gc_synced tl; ret
 
 (* Domain local timeline
@@ -181,3 +174,7 @@ let clear_domain_local () = set_domain_local nil
 let get_domain_local () =
   let tl = Domain.DLS.get key in
   if Repr.phys_equal tl nil then err_timeline_not_set () else tl
+
+(* The clock of the timeline of the domain. Outside a scheduler, the
+   timeline is [nil], whose clock is the system clock. *)
+let mtime_now_ns () = (Domain.DLS.get key).clock.now ()

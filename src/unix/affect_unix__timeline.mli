@@ -26,7 +26,9 @@ type mtime_span_ns = uint64
 (** The type for monotonic time spans with nanosecond precision. *)
 
 val mtime_now_ns : unit -> mtime_span_ns
-(** [mtime_now_ns ()] is the current value of the monotonic clock. *)
+(** [mtime_now_ns ()] is the current value of the clock of the domain
+    local timeline (see {!get_domain_local}), or of {!system_clock} if
+    there is none. *)
 
 val mtime_max_stamp : mtime_ns
 (** [mtime_max_stamp] is the maximal monotonic timestamp. *)
@@ -46,26 +48,24 @@ val mtime_span_ns_to_int_ms : mtime_span_ns -> int
     towards [0] and returns [max_int] if the [int] can't represent the
     magnitude. *)
 
-(** {1:virtual_time Virtual time}
+(** {1:clocks Monotonic clocks} *)
 
-    With virtual time on, {!mtime_now_ns} is a virtual clock that only
-    {!virtual_advance} moves. It is global to the program. *)
+type clock =
+  { now : unit -> mtime_ns;
+    (** [now ()] is the current time of the clock. *)
+    elapse : wait:(mtime_span_ns option -> bool) -> mtime_span_ns option -> bool
+    (** [elapse ~wait span] is called when the scheduler has nothing to
+        run. It must let at most [span] of time pass ([None] is no limit),
+        and use [wait timeout] to wait for events from outside the
+        scheduler: [wait] waits at most [timeout] ([None] is no limit) and
+        is [true] if events or new work are ready. [elapse] is [true] if
+        [wait] is, or if time passed. *) }
+(** The type for monotonic clocks. *)
 
-val is_virtual : unit -> bool
-(** [is_virtual ()] is [true] iff virtual time is on. *)
-
-val virtual_start : unit -> unit
-(** [virtual_start ()] turns virtual time on. The virtual clock starts at
-    the value of the real monotonic clock.
-
-    @raise Invalid_argument if virtual time is already on. *)
-
-val virtual_stop : unit -> unit
-(** [virtual_stop ()] turns virtual time off. *)
-
-val virtual_advance : mtime_span_ns -> unit
-(** [virtual_advance span] moves the virtual clock forward by [span], at
-    most to {!mtime_max_stamp}. *)
+val system_clock : clock
+(** [system_clock] is the monotonic clock of the operating system.
+    Its [elapse ~wait span] is [wait span]: time passes while [wait]
+    waits. *)
 
 (** {1:ptime_clock POSIX clock} *)
 
@@ -87,8 +87,15 @@ type t
 (** The type for timelines running on monotonic time. Timelines are
     synchronization safe. *)
 
-val make : unit -> t
-(** [make ()] is a new timeline that runs on monotonic time. *)
+val make : ?clock:clock -> unit -> t
+(** [make ~clock ()] is a new timeline that runs on the monotonic time of
+    [clock] (defaults to {!system_clock}). *)
+
+val clock : t -> clock
+(** [clock tl] is the clock of [tl]. *)
+
+val elapse : t -> wait:(mtime_span_ns option -> bool) -> mtime_span_ns option -> bool
+(** [elapse tl ~wait span] is [(clock tl).elapse ~wait span]. *)
 
 val is_empty : t -> bool
 (** [is_empty timeline] is [true] if and only there is no
