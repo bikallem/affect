@@ -46,6 +46,27 @@ val mtime_span_ns_to_int_ms : mtime_span_ns -> int
     towards [0] and returns [max_int] if the [int] can't represent the
     magnitude. *)
 
+(** {1:virtual_time Virtual time}
+
+    With virtual time on, {!mtime_now_ns} is a virtual clock that only
+    {!virtual_advance} moves. It is global to the program. *)
+
+val is_virtual : unit -> bool
+(** [is_virtual ()] is [true] iff virtual time is on. *)
+
+val virtual_start : unit -> unit
+(** [virtual_start ()] turns virtual time on. The virtual clock starts at
+    the value of the real monotonic clock.
+
+    @raise Invalid_argument if virtual time is already on. *)
+
+val virtual_stop : unit -> unit
+(** [virtual_stop ()] turns virtual time off. *)
+
+val virtual_advance : mtime_span_ns -> unit
+(** [virtual_advance span] moves the virtual clock forward by [span], at
+    most to {!mtime_max_stamp}. *)
+
 (** {1:ptime_clock POSIX clock} *)
 
 type ptime_d_ps = int * int64

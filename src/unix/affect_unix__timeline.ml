@@ -14,7 +14,7 @@ open Affect.Action.Private
 type uint64 = int64
 type mtime_ns = uint64
 type mtime_span_ns = uint64
-external mtime_now_ns : unit -> mtime_ns = "ocaml_affect_mtime_now_ns"
+external real_mtime_now_ns : unit -> mtime_ns = "ocaml_affect_mtime_now_ns"
 
 let int64_min_int_float = Int64.to_float Int64.min_int
 let int64_max_int_float = Int64.to_float Int64.max_int
@@ -33,6 +33,32 @@ let mtime_max_stamp = -1L
 let mtime_add_span t span =
   let sum = Int64.add t span in
   if mtime_compare t sum <= 0 then Some sum else None
+
+(* Virtual time
+
+   When virtual time is on, the monotonic clock is [virtual_ns] and only
+   {!virtual_advance} moves it. The unblocker of [Unix.main ~virtual_time:true]
+   advances it to the next deadline when no domain has work. *)
+
+let virtual_on = Atomic.make false
+let virtual_ns = Atomic.make 0L
+
+let mtime_now_ns () =
+  if Atomic.get virtual_on then Atomic.get virtual_ns else real_mtime_now_ns ()
+
+let is_virtual () = Atomic.get virtual_on
+let virtual_start () =
+  if not (Atomic.compare_and_set virtual_on false true)
+  then invalid_arg "Virtual time is already on";
+  Atomic.set virtual_ns (real_mtime_now_ns ())
+
+let virtual_stop () = Atomic.set virtual_on false
+let virtual_advance span =
+  let now = Atomic.get virtual_ns in
+  let next = match mtime_add_span now span with
+  | None -> mtime_max_stamp | Some t -> t
+  in
+  Atomic.set virtual_ns next
 
 (* POSIX clock
 

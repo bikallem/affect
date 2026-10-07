@@ -222,7 +222,8 @@ val unblocker : unit -> Action.unblocker
     {!Unix}, {!Mtime} and {!Ptime}. *)
 
 val main :
-  ?sigpipe:Signal.handler -> ?domain_spawn:((unit -> unit) -> unit Domain.t) ->
+  ?sigpipe:Signal.handler -> ?virtual_time:bool ->
+  ?domain_spawn:((unit -> unit) -> unit Domain.t) ->
   ?domain_count:int -> ?schedule:Fun.Async.Schedule.t ->
   ?handler:Fun.Async.Call_handler.t -> (unit -> 'a) -> 'a
 (** Invoking {!main} expands to:
@@ -232,7 +233,22 @@ val main :
     Fun.Async.main ~unblocker ?domain_spawn ?domain_count ?schedule ?handler f
     ]}
     The default of [sigpipe] is {!Unix.Signal.Ignore} which is the right
-    default. *)
+    default.
+
+    If [virtual_time] is [true] (defaults to [false]), {!Mtime} runs on a
+    virtual clock during [f], for tests. The clock starts at the real
+    monotonic time and moves only when no domain has work: then it goes
+    to the next {!Mtime} deadline at once. File descriptors are polled
+    without a wait before the clock moves, so data that is already in a
+    pipe or a socket pair is taken first. Notes:
+    {ul
+    {- The virtual clock is global to the program: only one [main] with
+       [virtual_time] can run at a time, and other code that reads
+       {!Mtime} in the meantime sees the virtual clock.
+       @raise Invalid_argument if a [main] with virtual time already runs.}
+    {- {!Ptime} deadlines do not use the virtual clock.}
+    {- Data that is not yet visible to [select(2)], for example data that a
+       peer sends through a network, does not stop the clock.}} *)
 
 (** {1:changes Changes from the [Unix] module} *)
 

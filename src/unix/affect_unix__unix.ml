@@ -20,28 +20,52 @@ module Unblocker = struct
   type t =
     { timeline : Affect_unix__timeline.t;
       signal_unblocker : Signal.Unblocker.t;
-      fd_unblocker : Fd_unblocker.t; }
+      fd_unblocker : Fd_unblocker.t;
+      bypass : bool Atomic.t; (* For virtual time: new work is ready. *) }
 
   let make () =
     let timeline = Affect_unix__timeline.make () in
     let signal_unblocker = Signal.Unblocker.make () in
     let fd_unblocker = Fd_unblocker.make () in
-    { timeline; signal_unblocker; fd_unblocker }
+    let bypass = Atomic.make false in
+    { timeline; signal_unblocker; fd_unblocker; bypass }
 
   let nonblock = Some 0L
+
+  (* With virtual time, the clock never waits. The fds are polled without
+     a wait. If nothing is ready and the scheduler asks to block, that is
+     no domain has work, the clock goes to the next deadline instead. With
+     no deadline, the fds are waited for with no limit, as with real
+     time. *)
+  let unblock_virtual u ~block ~did_unblock ~timeout_ns =
+    let fd_did_unblock = Fd_unblocker.unblock u.fd_unblocker ~timeout_ns:nonblock in
+    let did_unblock = did_unblock || fd_did_unblock in
+    if did_unblock || not block || Atomic.exchange u.bypass false
+    then did_unblock else
+    match timeout_ns with
+    | None -> Fd_unblocker.unblock u.fd_unblocker ~timeout_ns:None
+    | Some span ->
+        Affect_unix__timeline.virtual_advance span;
+        ignore (Affect_unix__timeline.progress_to_next_deadline u.timeline);
+        true
+
   let unblock u ~block =
     let timer_did_unblock, timeout_ns =
       Affect_unix__timeline.progress_to_next_deadline u.timeline
     in
     let signal_did_unblock = Signal.Unblocker.unblock u.signal_unblocker in
     let did_unblock = timer_did_unblock || signal_did_unblock in
+    if Affect_unix__timeline.is_virtual ()
+    then unblock_virtual u ~block ~did_unblock ~timeout_ns else
     let timeout_ns =
       if not block || did_unblock then nonblock else timeout_ns
     in
     let fd_did_unblock = Fd_unblocker.unblock u.fd_unblocker ~timeout_ns in
     did_unblock || fd_did_unblock
 
-  let set_block_bypass u () = Fd_unblocker.set_block_bypass u.fd_unblocker
+  let set_block_bypass u () =
+    Atomic.set u.bypass true;
+    Fd_unblocker.set_block_bypass u.fd_unblocker
 
   let domain_local u =
     let unblock = unblock u in
@@ -77,11 +101,18 @@ let unblocker () =
     ~init ~domain_local ~domain_install ~domain_uninstall ~deinit ()
 
 let main
-    ?(sigpipe = Signal.Ignore) ?domain_spawn ?domain_count ?schedule ?handler f
+    ?(sigpipe = Signal.Ignore) ?(virtual_time = false) ?domain_spawn
+    ?domain_count ?schedule ?handler f
   =
   Signal.set_and_restore Sys.sigpipe sigpipe @@ fun () ->
   let unblocker = unblocker () in
-  Fun.Async.main ~unblocker ?domain_spawn ?domain_count ?schedule ?handler f
+  if not virtual_time
+  then Fun.Async.main ~unblocker ?domain_spawn ?domain_count ?schedule ?handler f
+  else begin
+    Affect_unix__timeline.virtual_start ();
+    Fun.protect ~finally:Affect_unix__timeline.virtual_stop @@ fun () ->
+    Fun.Async.main ~unblocker ?domain_spawn ?domain_count ?schedule ?handler f
+  end
 
 (* Exending and overriding Unix *)
 
